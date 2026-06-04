@@ -25,8 +25,10 @@ func (tm *TokenManager) refreshSingleToken(authConfig AuthConfig) (types.TokenIn
 
 // refreshSocialToken 刷新Social认证token
 func refreshSocialToken(refreshToken string) (types.TokenInfo, error) {
-	refreshReq := types.RefreshRequest{
-		RefreshToken: refreshToken,
+	// 使用标准OAuth2 refresh_token grant格式
+	refreshReq := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
 	}
 
 	reqBody, err := utils.FastMarshal(refreshReq)
@@ -40,6 +42,9 @@ func refreshSocialToken(refreshToken string) (types.TokenInfo, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "kiro2api/1.0")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Connection", "keep-alive")
 
 	client := utils.SharedHTTPClient
 	resp, err := client.Do(req)

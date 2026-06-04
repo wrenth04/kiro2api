@@ -11,6 +11,7 @@ import (
 // AuthConfig 简化的认证配置
 type AuthConfig struct {
 	AuthType     string `json:"auth"`
+	AccessToken  string `json:"accessToken,omitempty"`
 	RefreshToken string `json:"refreshToken"`
 	ClientID     string `json:"clientId,omitempty"`
 	ClientSecret string `json:"clientSecret,omitempty"`

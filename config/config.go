@@ -16,7 +16,8 @@ var ModelMap = map[string]string{
 }
 
 // RefreshTokenURL 刷新token的URL (social方式)
-const RefreshTokenURL = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
+// 使用与device flow相同的OIDC端点
+const RefreshTokenURL = "https://oidc.us-east-1.amazonaws.com/token"
 
 // IdcRefreshTokenURL IdC认证方式的刷新token URL
 const IdcRefreshTokenURL = "https://oidc.us-east-1.amazonaws.com/token"

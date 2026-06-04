@@ -15,9 +15,8 @@ type TokenManager struct {
 	configs      []AuthConfig
 	mutex        sync.RWMutex
 	lastRefresh  time.Time
-	configOrder  []string        // 配置顺序
-	currentIndex int             // 当前使用的token索引
-	exhausted    map[string]bool // 已耗尽的token记录
+	configOrder  []string // 配置顺序
+	currentIndex int      // 当前使用的token索引
 }
 
 // SimpleTokenCache 简化的token缓存（纯数据结构，无锁）
@@ -49,7 +48,7 @@ func NewTokenManager(configs []AuthConfig) *TokenManager {
 	// 生成配置顺序
 	configOrder := generateConfigOrder(configs)
 
-	logger.Info("TokenManager初始化（顺序选择策略）",
+	logger.Info("TokenManager初始化（顺序耗尽策略）",
 		logger.Int("config_count", len(configs)),
 		logger.Int("config_order_count", len(configOrder)))
 
@@ -58,7 +57,6 @@ func NewTokenManager(configs []AuthConfig) *TokenManager {
 		configs:      configs,
 		configOrder:  configOrder,
 		currentIndex: 0,
-		exhausted:    make(map[string]bool),
 	}
 }
 
@@ -132,9 +130,9 @@ func (tm *TokenManager) GetBestTokenWithUsage() (*types.TokenWithUsage, error) {
 	return tokenWithUsage, nil
 }
 
-// selectBestTokenUnlocked 按配置顺序选择下一个可用token
+// selectBestTokenUnlocked 按配置顺序选择token，优先耗尽当前token
+// 策略：用完当前token后再切换到下一个（顺序耗尽策略）
 // 内部方法：调用者必须持有 tm.mutex
-// 重构说明：从selectBestToken改为Unlocked后缀，明确锁约定
 func (tm *TokenManager) selectBestTokenUnlocked() *CachedToken {
 	// 调用者已持有 tm.mutex，无需额外加锁
 
@@ -142,7 +140,7 @@ func (tm *TokenManager) selectBestTokenUnlocked() *CachedToken {
 	if len(tm.configOrder) == 0 {
 		for key, cached := range tm.cache.tokens {
 			if time.Since(cached.CachedAt) <= tm.cache.ttl && cached.IsUsable() {
-				logger.Debug("顺序策略选择token（无顺序配置）",
+				logger.Debug("顺序耗尽策略选择token（无顺序配置）",
 					logger.String("selected_key", key),
 					logger.Float64("available_count", cached.Available))
 				return cached
@@ -151,42 +149,53 @@ func (tm *TokenManager) selectBestTokenUnlocked() *CachedToken {
 		return nil
 	}
 
-	// 从当前索引开始，找到第一个可用的token
-	for attempts := 0; attempts < len(tm.configOrder); attempts++ {
-		currentKey := tm.configOrder[tm.currentIndex]
-
-		// 检查这个token是否存在且可用
-		if cached, exists := tm.cache.tokens[currentKey]; exists {
-			// 检查token是否过期
-			if time.Since(cached.CachedAt) > tm.cache.ttl {
-				tm.exhausted[currentKey] = true
-				tm.currentIndex = (tm.currentIndex + 1) % len(tm.configOrder)
-				continue
-			}
-
+	// 先检查当前token是否还可用（优先耗尽当前token）
+	currentKey := tm.configOrder[tm.currentIndex]
+	if cached, exists := tm.cache.tokens[currentKey]; exists {
+		// 检查token是否过期
+		if time.Since(cached.CachedAt) <= tm.cache.ttl {
 			// 检查token是否可用
 			if cached.IsUsable() {
-				logger.Debug("顺序策略选择token",
-					logger.String("selected_key", currentKey),
+				logger.Debug("顺序耗尽策略：继续使用当前token",
+					logger.String("current_key", currentKey),
 					logger.Int("index", tm.currentIndex),
 					logger.Float64("available_count", cached.Available))
 				return cached
 			}
 		}
+	}
 
-		// 标记当前token为已耗尽，移动到下一个
-		tm.exhausted[currentKey] = true
+	// 当前token已耗尽或过期，查找下一个可用的token
+	for attempts := 0; attempts < len(tm.configOrder); attempts++ {
 		tm.currentIndex = (tm.currentIndex + 1) % len(tm.configOrder)
+		nextKey := tm.configOrder[tm.currentIndex]
 
-		logger.Debug("token不可用，切换到下一个",
-			logger.String("exhausted_key", currentKey),
-			logger.Int("next_index", tm.currentIndex))
+		if cached, exists := tm.cache.tokens[nextKey]; exists {
+			// 检查token是否过期
+			if time.Since(cached.CachedAt) > tm.cache.ttl {
+				logger.Debug("token已过期，继续查找",
+					logger.String("expired_key", nextKey))
+				continue
+			}
+
+			// 检查token是否可用
+			if cached.IsUsable() {
+				logger.Info("顺序耗尽策略：切换到下一个token",
+					logger.String("previous_key", currentKey),
+					logger.String("new_key", nextKey),
+					logger.Int("new_index", tm.currentIndex),
+					logger.Float64("available_count", cached.Available))
+				return cached
+			}
+
+			logger.Debug("token可用次数为0，继续查找",
+				logger.String("exhausted_key", nextKey))
+		}
 	}
 
 	// 所有token都不可用
 	logger.Warn("所有token都不可用",
-		logger.Int("total_count", len(tm.configOrder)),
-		logger.Int("exhausted_count", len(tm.exhausted)))
+		logger.Int("total_count", len(tm.configOrder)))
 
 	return nil
 }
@@ -201,29 +210,51 @@ func (tm *TokenManager) refreshCacheUnlocked() error {
 			continue
 		}
 
-		// 刷新token
-		token, err := tm.refreshSingleToken(cfg)
-		if err != nil {
-			logger.Warn("刷新单个token失败",
+		// 如果配置中有AccessToken，优先使用（刚从device flow获取的token）
+		var token types.TokenInfo
+		if cfg.AccessToken != "" {
+			logger.Debug("使用配置中的AccessToken（刚获取的token）",
 				logger.Int("config_index", i),
-				logger.String("auth_type", cfg.AuthType),
-				logger.Err(err))
-			continue
+				logger.String("auth_type", cfg.AuthType))
+			token = types.Token{
+				AccessToken:  cfg.AccessToken,
+				RefreshToken: cfg.RefreshToken,
+				ExpiresAt:    time.Now().Add(24 * time.Hour),
+			}
+		} else {
+			// 否则尝试刷新token
+			var err error
+			token, err = tm.refreshSingleToken(cfg)
+			if err != nil {
+				logger.Warn("刷新单个token失败，尝试使用RefreshToken作为AccessToken（可能是新token）",
+					logger.Int("config_index", i),
+					logger.String("auth_type", cfg.AuthType),
+					logger.Err(err))
+
+				// 降级方案：使用RefreshToken作为AccessToken（某些OAuth流程中refresh token可以直接使用）
+				token = types.Token{
+					AccessToken:  cfg.RefreshToken,
+					RefreshToken: cfg.RefreshToken,
+					ExpiresAt:    time.Now().Add(24 * time.Hour),
+				}
+			}
 		}
 
 		// 检查使用限制
 		var usageInfo *types.UsageLimits
-		var available float64
+		var available float64 = 1000 // 默认可用次数
 
 		checker := NewUsageLimitsChecker()
 		if usage, checkErr := checker.CheckUsageLimits(token); checkErr == nil {
 			usageInfo = usage
 			available = CalculateAvailableCount(usage)
 		} else {
-			logger.Warn("检查使用限制失败", logger.Err(checkErr))
+			logger.Warn("检查使用限制失败，使用默认可用次数",
+				logger.Err(checkErr),
+				logger.Float64("default_available", available))
 		}
 
-		// 更新缓存（直接访问，已在tm.mutex保护下）
+		// 更新缓存
 		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, i)
 		tm.cache.tokens[cacheKey] = &CachedToken{
 			Token:     token,

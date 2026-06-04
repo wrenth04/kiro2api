@@ -50,9 +50,13 @@ func (c *UsageLimitsChecker) CheckUsageLimits(token types.TokenInfo) (*types.Usa
 	req.Header.Set("Connection", "close")
 
 	// 发送请求
+	tokenPreview := token.AccessToken
+	if len(tokenPreview) > 20 {
+		tokenPreview = tokenPreview[:20] + "..."
+	}
 	logger.Debug("发送使用限制检查请求",
 		logger.String("url", requestURL),
-		logger.String("token_preview", token.AccessToken[:20]+"..."))
+		logger.String("token_preview", tokenPreview))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
