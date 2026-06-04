@@ -16,41 +16,8 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}/${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          # Linux builds
-          - os: linux
-            arch: amd64
-            runner: ubuntu-latest
-            output_name: kiro2api-linux-amd64
-          - os: linux
-            arch: arm64
-            runner: ubuntu-latest
-            output_name: kiro2api-linux-arm64
-
-          # Windows builds
-          - os: windows
-            arch: amd64
-            runner: windows-latest
-            output_name: kiro2api-windows-amd64.exe
-          - os: windows
-            arch: arm64
-            runner: windows-latest
-            output_name: kiro2api-windows-arm64.exe
-
-          # macOS builds
-          - os: darwin
-            arch: amd64
-            runner: macos-13
-            output_name: kiro2api-darwin-amd64
-          - os: darwin
-            arch: arm64
-            runner: macos-latest
-            output_name: kiro2api-darwin-arm64
-
+    name: Build All Platforms
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
@@ -75,39 +42,36 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Build binary
-        run: go build -o "${{ matrix.output_name }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" main.go
-        shell: bash
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: 0
-
-      - name: Create checksum (Linux/macOS)
-        if: matrix.os != 'windows'
+      - name: Build binaries for all platforms
         run: |
-          sha256sum ${{ matrix.output_name }} > ${{ matrix.output_name }}.sha256
+          VERSION="${{ steps.version.outputs.version }}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+
+          # Linux builds
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o kiro2api-linux-amd64 -ldflags="${LDFLAGS}" main.go
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o kiro2api-linux-arm64 -ldflags="${LDFLAGS}" main.go
+
+          # Windows builds
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o kiro2api-windows-amd64.exe -ldflags="${LDFLAGS}" main.go
+          GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o kiro2api-windows-arm64.exe -ldflags="${LDFLAGS}" main.go
+
+          # macOS builds
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o kiro2api-darwin-amd64 -ldflags="${LDFLAGS}" main.go
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o kiro2api-darwin-arm64 -ldflags="${LDFLAGS}" main.go
         shell: bash
 
-      - name: Create checksum (Windows)
-        if: matrix.os == 'windows'
+      - name: Create checksums
         run: |
-          $hash = (Get-FileHash -Path "${{ matrix.output_name }}" -Algorithm SHA256).Hash
-          "$hash  ${{ matrix.output_name }}" | Out-File -FilePath "${{ matrix.output_name }}.sha256"
-        shell: pwsh
+          for file in kiro2api-*; do
+            sha256sum "$file" > "$file.sha256"
+          done
+        shell: bash
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.output_name }}
-          path: ${{ matrix.output_name }}
-          retention-days: 5
-
-      - name: Upload checksum artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.output_name }}.sha256
-          path: ${{ matrix.output_name }}.sha256
+          name: binaries
+          path: kiro2api-*
           retention-days: 5
 
   create-release:
@@ -126,12 +90,8 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          name: binaries
           path: release-artifacts
-
-      - name: Flatten artifact structure
-        run: |
-          mkdir -p final-release
-          find release-artifacts -type f -exec cp {} final-release/ \;
 
       - name: Create Release Notes
         id: notes
@@ -143,14 +103,14 @@ jobs:
             echo ""
             echo "### 📦 Downloads"
             echo ""
-            ls final-release/ | grep -v '.sha256' | while read file; do
+            ls release-artifacts/ | grep -v '.sha256' | while read file; do
               echo "- [\`${file}\`](./releases/download/${VERSION}/${file})"
             done
             echo ""
             echo "### 🔐 Checksums"
             echo ""
             echo "\`\`\`"
-            cat final-release/*.sha256
+            cat release-artifacts/*.sha256
             echo "\`\`\`"
             echo ""
             echo "### 📋 Usage"
@@ -171,7 +131,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: final-release/*
+          files: release-artifacts/*
           body_path: release-notes.md
           draft: false
           prerelease: false
@@ -187,6 +147,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          name: binaries
           path: verify-artifacts
 
       - name: Verify binary existence
@@ -202,11 +163,4 @@ jobs:
       - name: Verify checksums
         run: |
           cd verify-artifacts
-          find . -type f -name "*.sha256" -exec dirname {} \; | sort -u | while read dir; do
-            if [ -f "$dir"/*.sha256 ]; then
-              echo "Verifying checksums in $dir..."
-              cd "$dir"
-              sha256sum -c *.sha256 || exit 1
-              cd ..
-            fi
-          done
+          sha256sum -c *.sha256 || exit 1
