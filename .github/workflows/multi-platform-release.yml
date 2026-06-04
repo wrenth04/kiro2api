@@ -1,0 +1,214 @@
+name: Multi-Platform Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must start with v)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  GO_VERSION: '1.24.0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            output_name: kiro2api-linux-amd64
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            output_name: kiro2api-linux-arm64
+
+          # Windows builds
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            output_name: kiro2api-windows-amd64.exe
+          - os: windows
+            arch: arm64
+            runner: windows-latest
+            output_name: kiro2api-windows-arm64.exe
+
+          # macOS builds
+          - os: darwin
+            arch: amd64
+            runner: macos-13
+            output_name: kiro2api-darwin-amd64
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            output_name: kiro2api-darwin-arm64
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=${{ github.event.inputs.tag }}
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Build binary
+        run: |
+          go build -o ${{ matrix.output_name }} \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" \
+            main.go
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+
+      - name: Create checksum (Linux/macOS)
+        if: matrix.os != 'windows'
+        run: |
+          sha256sum ${{ matrix.output_name }} > ${{ matrix.output_name }}.sha256
+        shell: bash
+
+      - name: Create checksum (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          $hash = (Get-FileHash -Path "${{ matrix.output_name }}" -Algorithm SHA256).Hash
+          "$hash  ${{ matrix.output_name }}" | Out-File -FilePath "${{ matrix.output_name }}.sha256"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_name }}
+          path: ${{ matrix.output_name }}
+          retention-days: 5
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_name }}.sha256
+          path: ${{ matrix.output_name }}.sha256
+          retention-days: 5
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten artifact structure
+        run: |
+          mkdir -p final-release
+          find release-artifacts -type f -exec cp {} final-release/ \;
+
+      - name: Create Release Notes
+        id: notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          {
+            echo "## Release ${VERSION}"
+            echo ""
+            echo "### 📦 Downloads"
+            echo ""
+            ls final-release/ | grep -v '.sha256' | while read file; do
+              echo "- [\`${file}\`](./releases/download/${VERSION}/${file})"
+            done
+            echo ""
+            echo "### 🔐 Checksums"
+            echo ""
+            echo "\`\`\`"
+            cat final-release/*.sha256
+            echo "\`\`\`"
+            echo ""
+            echo "### 📋 Usage"
+            echo ""
+            echo "\`\`\`bash"
+            echo "# Download binary"
+            echo "wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/kiro2api-linux-amd64"
+            echo ""
+            echo "# Make executable"
+            echo "chmod +x kiro2api-linux-amd64"
+            echo ""
+            echo "# Run"
+            echo "./kiro2api-linux-amd64"
+            echo "\`\`\`"
+          } > release-notes.md
+          cat release-notes.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: final-release/*
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-artifacts:
+    name: Verify Artifacts
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: verify-artifacts
+
+      - name: Verify binary existence
+        run: |
+          echo "✅ Artifacts downloaded successfully"
+          echo ""
+          echo "📋 All binaries:"
+          find verify-artifacts -type f ! -name "*.sha256" | sort
+          echo ""
+          echo "📋 All checksums:"
+          find verify-artifacts -type f -name "*.sha256" | sort
+
+      - name: Verify checksums
+        run: |
+          cd verify-artifacts
+          find . -type f -name "*.sha256" -exec dirname {} \; | sort -u | while read dir; do
+            if [ -f "$dir"/*.sha256 ]; then
+              echo "Verifying checksums in $dir..."
+              cd "$dir"
+              sha256sum -c *.sha256 || exit 1
+              cd ..
+            fi
+          done

@@ -3,7 +3,7 @@ package types
 import (
 	"fmt"
 
-	"github.com/bytedance/sonic"
+	"encoding/json"
 )
 
 // CodeWhispererRequest 表示 CodeWhisperer API 的请求结构
@@ -579,13 +579,13 @@ func referencesToDict(refs []Reference) []map[string]any {
 
 // MarshalJSON 自定义JSON序列化
 func (are *AssistantResponseEvent) MarshalJSON() ([]byte, error) {
-	return sonic.Marshal(are.ToDict())
+	return json.Marshal(are.ToDict())
 }
 
 // UnmarshalJSON 自定义JSON反序列化
 func (are *AssistantResponseEvent) UnmarshalJSON(data []byte) error {
 	var dict map[string]any
-	if err := sonic.Unmarshal(data, &dict); err != nil {
+	if err := json.Unmarshal(data, &dict); err != nil {
 		return fmt.Errorf("JSON反序列化失败: %w", err)
 	}
 

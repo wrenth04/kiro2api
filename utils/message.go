@@ -6,7 +6,7 @@ import (
 
 	"kiro2api/types"
 
-	"github.com/bytedance/sonic"
+	"encoding/json"
 )
 
 // ParseToolResultContent 解析tool_result的content字段
@@ -43,7 +43,7 @@ func ParseToolResultContent(content any) string {
 					result.WriteString(text + "\n")
 				} else {
 					// 其他结构化数据序列化为JSON
-					if data, err := sonic.Marshal(itemVal); err == nil {
+					if data, err := json.Marshal(itemVal); err == nil {
 						result.WriteString(string(data) + "\n")
 					} else {
 						result.WriteString(fmt.Sprintf("%v\n", itemVal))
@@ -85,7 +85,7 @@ func ParseToolResultContent(content any) string {
 		}
 
 		// 序列化整个对象
-		if data, err := sonic.Marshal(v); err == nil {
+		if data, err := json.Marshal(v); err == nil {
 			return string(data)
 		}
 		return fmt.Sprintf("%v", v)
@@ -112,8 +112,8 @@ func GetMessageContent(content any) (string, error) {
 		for _, block := range v {
 			if m, ok := block.(map[string]any); ok {
 				var cb types.ContentBlock
-				if data, err := sonic.Marshal(m); err == nil {
-					if err := sonic.Unmarshal(data, &cb); err == nil {
+				if data, err := json.Marshal(m); err == nil {
+					if err := json.Unmarshal(data, &cb); err == nil {
 						switch cb.Type {
 						case "tool_result":
 							if cb.Content != nil {

@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/bytedance/sonic"
 )
 
 // Level 日志级别类型
@@ -234,10 +233,10 @@ func (l *Logger) marshalLogEntry(entry *LogEntry) []byte {
 
 	b.WriteString(`,"message":"`)
 	// 转义message中的特殊字符
-	escapedMsg, _ := sonic.MarshalString(entry.Message)
+	escapedMsg, _ := json.Marshal(entry.Message)
 	// 移除外层引号
 	if len(escapedMsg) >= 2 {
-		b.WriteString(escapedMsg[1 : len(escapedMsg)-1])
+		b.WriteString(string(escapedMsg[1 : len(escapedMsg)-1]))
 	}
 	b.WriteString(`"`)
 
@@ -258,7 +257,7 @@ func (l *Logger) marshalLogEntry(entry *LogEntry) []byte {
 			b.WriteString(k)
 			b.WriteString(`":`)
 			// 序列化字段值
-			if fieldJSON, err := sonic.Marshal(v); err == nil {
+			if fieldJSON, err := json.Marshal(v); err == nil {
 				b.Write(fieldJSON)
 			} else {
 				b.WriteString(`null`)
