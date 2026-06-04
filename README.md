@@ -36,12 +36,13 @@ claude-code --model claude-sonnet-4 "帮我重构这段代码"
     {"auth": "Social", "refreshToken": "个人账号2"},
     {"auth": "IdC", "refreshToken": "企业账号"}
   ],
-  "选择策略": "sequential - 按配置顺序依次使用"
+  "选择策略": "sequential-exhaustion - 用完一个再用下一个"
 }
 ```
 
 **核心特性**:
-- **顺序选择**: 按配置顺序依次使用账号
+- **顺序耗尽**: 优先耗尽当前账号的配额，用完后自动切换到下一个
+- **自动追加**: `get-token` 命令自动检测环境变量，追加新 token 到现有配置
 - **故障转移**: 账号用完自动切换到下一个
 - **使用监控**: 实时监控每个账号的使用情况
 
@@ -161,7 +162,8 @@ graph TB
 | **工具调用** | 完整 Anthropic 工具使用支持 | 状态机 + 生命周期管理 |
 | **格式转换** | Anthropic ↔ OpenAI ↔ CodeWhisperer | 智能协议转换器 |
 | **零延迟流式** | 实时流式传输优化 | EventStream 解析 + 对象池 |
-| **顺序选择** | 按配置顺序使用 Token | 顺序轮换 + 故障转移 |
+| **顺序耗尽策略** | 优先耗尽当前 Token | 粘性选择 + 自动切换 |
+| **自动追加 Token** | `get-token` 命令自动追加 | 环境变量检测 + 配置合并 |
 
 ## 技术栈
 
@@ -181,9 +183,17 @@ git clone <repository-url>
 cd kiro2api
 go build -o kiro2api main.go
 
+# 方式1：获取新 token（交互式设备授权流程）
+./kiro2api get-token --output config.json
+
+# 方式2：自动追加 token 到现有配置（推荐多账号）
+export KIRO_AUTH_TOKEN=config.json
+./kiro2api get-token                    # 追加第2个 Social token
+./kiro2api get-token --type IdC         # 追加 IdC token
+
 # 配置环境变量
 cp .env.example .env
-# 编辑 .env 文件，设置 KIRO_AUTH_TOKEN
+# 编辑 .env 文件，设置 KIRO_AUTH_TOKEN 和 KIRO_CLIENT_TOKEN
 
 # 启动服务器
 ./kiro2api
@@ -194,6 +204,30 @@ curl -X POST http://localhost:8080/v1/messages \
   -H "Authorization: Bearer 123456" \
   -d '{"model": "claude-sonnet-4-20250514", "max_tokens": 100, "messages": [{"role": "user", "content": "你好"}]}'
 ```
+
+### get-token 命令详解
+
+**获取第一个 token：**
+```bash
+./kiro2api get-token --output auth_config.json
+# 创建新文件，包含一个 Social token
+```
+
+**追加第二个 token（核心新功能）：**
+```bash
+export KIRO_AUTH_TOKEN=auth_config.json
+./kiro2api get-token
+# ✓ 读取现有配置 (1个token)
+# ✓ 已将新token追加到配置列表 (现在共2个token)
+```
+
+**获取不同类型的 token：**
+```bash
+./kiro2api get-token --type IdC
+# 追加 IdC 企业认证 token
+```
+
+详见 [GET_TOKEN_USAGE.md](./GET_TOKEN_USAGE.md) 了解完整用法。
 
 ### Docker 部署
 
@@ -525,6 +559,8 @@ curl -N -H "Authorization: Bearer $KIRO_CLIENT_TOKEN" \
 ## 更多资源
 
 - **详细开发指南**: [CLAUDE.md](./CLAUDE.md)
+- **改动说明**: [CHANGES_SUMMARY.md](./CHANGES_SUMMARY.md) - Token 管理策略更新和 get-token 增强
+- **get-token 使用指南**: [GET_TOKEN_USAGE.md](./GET_TOKEN_USAGE.md) - 详细的 token 获取和追加方法
 - **包结构说明**: 分层架构设计，遵循 SOLID 原则
 - **性能优化**: 缓存策略、并发控制、内存管理
 - **核心开发任务**: 扩展功能、性能调优、高级特性
