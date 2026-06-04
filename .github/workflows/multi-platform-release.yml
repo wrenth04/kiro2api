@@ -76,10 +76,8 @@ jobs:
         shell: bash
 
       - name: Build binary
-        run: |
-          go build -o ${{ matrix.output_name }} \
-            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" \
-            main.go
+        run: go build -o "${{ matrix.output_name }}" -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" main.go
+        shell: bash
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
