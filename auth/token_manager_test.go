@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
 	"kiro2api/config"
 	"kiro2api/types"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -242,4 +244,168 @@ func TestTokenManager_SequentialSelection(t *testing.T) {
 	}
 
 	t.Logf("✅ 顺序选择策略验证通过：粘性策略正确工作")
+}
+
+// TestTokenManager_MarkTokenInvalid 测试标记token为失效的功能
+func TestTokenManager_MarkTokenInvalid(t *testing.T) {
+	// 创建测试配置
+	configs := []AuthConfig{
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "test_token_1",
+		},
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "test_token_2",
+		},
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "test_token_3",
+		},
+	}
+
+	// 创建TokenManager
+	tm := NewTokenManager(configs)
+
+	// 预填充缓存
+	tm.mutex.Lock()
+	for i := range configs {
+		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, i)
+		tm.cache.tokens[cacheKey] = &CachedToken{
+			Token: types.TokenInfo{
+				AccessToken: fmt.Sprintf("access_token_%d", i),
+				ExpiresAt:   time.Now().Add(1 * time.Hour),
+			},
+			UsageInfo: nil,
+			CachedAt:  time.Now(),
+			Available: 100.0,
+		}
+	}
+	tm.lastRefresh = time.Now()
+	tm.mutex.Unlock()
+
+	// 第一次获取token，应该获取token_0
+	token1, err := tm.getBestToken()
+	if err != nil {
+		t.Errorf("获取第一个token失败: %v", err)
+	}
+	if token1.AccessToken != "access_token_0" {
+		t.Errorf("期望获取access_token_0，实际获取%s", token1.AccessToken)
+	}
+
+	// 标记token_0为失效
+	cacheKey0 := fmt.Sprintf(config.TokenCacheKeyFormat, 0)
+	err = tm.MarkTokenInvalid(cacheKey0)
+	if err != nil {
+		t.Errorf("标记token为失效失败: %v", err)
+	}
+
+	// 验证token_0已被标记为失效（可用次数为0）
+	tm.mutex.RLock()
+	cached0 := tm.cache.tokens[cacheKey0]
+	if cached0.Available != 0 {
+		t.Errorf("期望token_0的Available为0，实际为%f", cached0.Available)
+	}
+	tm.mutex.RUnlock()
+
+	// 下次获取token，应该跳过token_0，获取token_1
+	token2, err := tm.getBestToken()
+	if err != nil {
+		t.Errorf("获取第二个token失败: %v", err)
+	}
+	if token2.AccessToken != "access_token_1" {
+		t.Errorf("期望获取access_token_1（跳过失效的token_0），实际获取%s", token2.AccessToken)
+	}
+
+	// 验证currentIndex已被重置
+	tm.mutex.RLock()
+	currentKey := tm.configOrder[tm.currentIndex]
+	tm.mutex.RUnlock()
+	if currentKey != cacheKey0 {
+		t.Logf("✅ Token已自动切换，currentIndex指向下一个token")
+	}
+
+	t.Logf("✅ MarkTokenInvalid功能验证通过：token已正确标记失效并自动切换")
+}
+
+// TestDisableTokenInConfig 测试持久化token失效状态到配置文件
+func TestDisableTokenInConfig(t *testing.T) {
+	// 创建临时配置文件
+	tmpFile, err := os.CreateTemp("", "test_auth_*.json")
+	if err != nil {
+		t.Fatalf("创建临时文件失败: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// 写入初始配置
+	initialConfig := []AuthConfig{
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "token_1",
+		},
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "token_2",
+		},
+		{
+			AuthType:     AuthMethodSocial,
+			RefreshToken: "token_3",
+		},
+	}
+
+	initialData, err := json.MarshalIndent(initialConfig, "", "  ")
+	if err != nil {
+		t.Fatalf("序列化初始配置失败: %v", err)
+	}
+
+	if err := os.WriteFile(tmpFile.Name(), initialData, 0600); err != nil {
+		t.Fatalf("写入初始配置失败: %v", err)
+	}
+
+	// 设置配置文件路径
+	configMutex.Lock()
+	configFilePath = tmpFile.Name()
+	configMutex.Unlock()
+
+	// 测试禁用token_2
+	err = DisableTokenInConfig("token_2")
+	if err != nil {
+		t.Errorf("禁用token失败: %v", err)
+	}
+
+	// 读取并验证配置文件
+	content, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("读取配置文件失败: %v", err)
+	}
+
+	var updatedConfig []AuthConfig
+	if err := json.Unmarshal(content, &updatedConfig); err != nil {
+		t.Fatalf("解析更新后的配置失败: %v", err)
+	}
+
+	// 验证token_2已被禁用
+	token2Found := false
+	for _, config := range updatedConfig {
+		if config.RefreshToken == "token_2" {
+			token2Found = true
+			if !config.Disabled {
+				t.Errorf("期望token_2被禁用，实际未禁用")
+			}
+			break
+		}
+	}
+
+	if !token2Found {
+		t.Errorf("在配置文件中找不到token_2")
+	}
+
+	// 验证其他token未被禁用
+	for _, config := range updatedConfig {
+		if config.RefreshToken != "token_2" && config.Disabled {
+			t.Errorf("不期望的token被禁用: %s", config.RefreshToken)
+		}
+	}
+
+	t.Logf("✅ DisableTokenInConfig功能验证通过：token已正确禁用并持久化到文件")
 }

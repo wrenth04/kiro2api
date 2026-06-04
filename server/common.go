@@ -204,9 +204,23 @@ func handleCodeWhispererError(c *gin.Context, resp *http.Response) bool {
 			logger.String("response_body", string(body)),
 		)...)
 
-	// 特殊处理：403错误表示token失效 (保持向后兼容)
+	// 特殊处理：403错误表示token失效
 	if resp.StatusCode == http.StatusForbidden {
-		logger.Warn("收到403错误，token可能已失效")
+		logger.Warn("收到403错误，token已失效，尝试标记并切换")
+		// 尝试标记当前token为失效
+		if tokenManager, exists := c.Get("token_manager"); exists {
+			if tm, ok := tokenManager.(interface{ MarkTokenInvalid(string) error }); ok {
+				if cacheKey, cacheKeyExists := c.Get("token_cache_key"); cacheKeyExists {
+					if key, ok := cacheKey.(string); ok {
+						if markErr := tm.MarkTokenInvalid(key); markErr != nil {
+							logger.Error("标记token失效失败", logger.Err(markErr))
+						} else {
+							logger.Info("Token已标记为失效，下次请求将使用新token")
+						}
+					}
+				}
+			}
+		}
 		respondErrorWithCode(c, http.StatusUnauthorized, "unauthorized", "%s", "Token已失效，请重试")
 		return true
 	}

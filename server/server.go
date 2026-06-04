@@ -85,6 +85,19 @@ func StartServer(port string, authToken string, authService *auth.AuthService) {
 			return // 错误已在GetTokenWithUsageAndBody中处理
 		}
 
+		// 注入token管理器和缓存键到context，用于403错误处理
+		tokenManager := authService.GetTokenManager()
+		c.Set("token_manager", tokenManager)
+		if tokenManager != nil {
+			// 获取当前使用的token缓存键，在403错误时使用
+			cacheKey := tokenManager.GetCurrentTokenCacheKey()
+			if cacheKey != "" {
+				c.Set("token_cache_key", cacheKey)
+				logger.Debug("设置token缓存键到context",
+					logger.String("cache_key", cacheKey))
+			}
+		}
+
 		// 先解析为通用map以便处理工具格式
 		var rawReq map[string]any
 		if err := utils.SafeUnmarshal(body, &rawReq); err != nil {
@@ -187,6 +200,19 @@ func StartServer(port string, authToken string, authService *auth.AuthService) {
 		tokenInfo, body, err := reqCtx.GetTokenAndBody()
 		if err != nil {
 			return // 错误已在GetTokenAndBody中处理
+		}
+
+		// 注入token管理器和缓存键到context，用于403错误处理
+		tokenManager := authService.GetTokenManager()
+		c.Set("token_manager", tokenManager)
+		if tokenManager != nil {
+			// 获取当前使用的token缓存键，在403错误时使用
+			cacheKey := tokenManager.GetCurrentTokenCacheKey()
+			if cacheKey != "" {
+				c.Set("token_cache_key", cacheKey)
+				logger.Debug("设置token缓存键到context",
+					logger.String("cache_key", cacheKey))
+			}
 		}
 
 		var openaiReq types.OpenAIRequest

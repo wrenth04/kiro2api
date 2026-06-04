@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 
 	"kiro2api/logger"
 )
@@ -22,6 +23,12 @@ type AuthConfig struct {
 const (
 	AuthMethodSocial = "Social"
 	AuthMethodIdC    = "IdC"
+)
+
+// configFilePath 全局变量，存储配置文件路径（用于更新失效token）
+var (
+	configFilePath string
+	configMutex    sync.RWMutex
 )
 
 // loadConfigs 从环境变量加载配置
@@ -63,6 +70,10 @@ func loadConfigs() ([]AuthConfig, error) {
 			return nil, fmt.Errorf("读取配置文件失败: %w\n配置文件路径: %s", err, jsonData)
 		}
 		configData = string(content)
+		// 记录配置文件路径
+		configMutex.Lock()
+		configFilePath = jsonData
+		configMutex.Unlock()
 		logger.Info("从文件加载认证配置", logger.String("文件路径", jsonData))
 	} else {
 		// 不是文件或文件不存在，作为JSON字符串处理
@@ -151,4 +162,88 @@ func processConfigs(configs []AuthConfig) []AuthConfig {
 	}
 
 	return validConfigs
+}
+
+// DisableTokenInConfig 在配置文件中标记指定的token为禁用
+// refreshToken: 要禁用的token的refreshToken值
+func DisableTokenInConfig(refreshToken string) error {
+	configMutex.RLock()
+	filePath := configFilePath
+	configMutex.RUnlock()
+
+	// 如果没有配置文件路径，无法保存
+	if filePath == "" {
+		logger.Warn("无法持久化token失效状态：未从文件加载配置",
+			logger.String("reason", "配置来自环境变量JSON字符串"))
+		return fmt.Errorf("configuration not loaded from file, cannot persist changes")
+	}
+
+	// 读取现有配置
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		logger.Error("读取配置文件失败",
+			logger.String("file_path", filePath),
+			logger.Err(err))
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// 解析配置
+	var configs []AuthConfig
+	if err := json.Unmarshal(content, &configs); err != nil {
+		// 尝试解析为单个对象
+		var single AuthConfig
+		if err := json.Unmarshal(content, &single); err != nil {
+			logger.Error("解析配置文件JSON失败",
+				logger.String("file_path", filePath),
+				logger.Err(err))
+			return fmt.Errorf("failed to parse config file: %w", err)
+		}
+		configs = []AuthConfig{single}
+	}
+
+	// 查找并禁用对应的token
+	found := false
+	for i := range configs {
+		if configs[i].RefreshToken == refreshToken {
+			configs[i].Disabled = true
+			found = true
+			logger.Info("标记token为禁用",
+				logger.Int("config_index", i),
+				logger.String("refresh_token_preview", createTokenPreviewConfig(refreshToken)))
+			break
+		}
+	}
+
+	if !found {
+		logger.Warn("无法在配置中找到指定的token",
+			logger.String("refresh_token_preview", createTokenPreviewConfig(refreshToken)))
+		return fmt.Errorf("token not found in config file")
+	}
+
+	// 写回配置文件
+	updatedContent, err := json.MarshalIndent(configs, "", "  ")
+	if err != nil {
+		logger.Error("序列化配置失败",
+			logger.Err(err))
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, updatedContent, 0600); err != nil {
+		logger.Error("写入配置文件失败",
+			logger.String("file_path", filePath),
+			logger.Err(err))
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	logger.Info("Token禁用状态已持久化到配置文件",
+		logger.String("file_path", filePath))
+	return nil
+}
+
+// createTokenPreviewConfig 为config.go中使用创建token预览
+func createTokenPreviewConfig(token string) string {
+	if len(token) <= 10 {
+		return "***" + token[len(token):]
+	}
+	return "***" + token[len(token)-10:]
 }

@@ -5,6 +5,7 @@ import (
 	"kiro2api/config"
 	"kiro2api/logger"
 	"kiro2api/types"
+	"strings"
 	"sync"
 	"time"
 )
@@ -283,6 +284,63 @@ func (ct *CachedToken) IsUsable() bool {
 	return ct.Available > 0
 }
 
+// GetCurrentTokenCacheKey 获取当前使用的token的缓存键
+func (tm *TokenManager) GetCurrentTokenCacheKey() string {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	if len(tm.configOrder) == 0 {
+		return ""
+	}
+
+	if tm.currentIndex >= len(tm.configOrder) {
+		return ""
+	}
+
+	return tm.configOrder[tm.currentIndex]
+}
+
+// MarkTokenInvalid 标记指定的token为失效，强制切换到下一个可用token
+// 当收到403错误时调用此方法
+func (tm *TokenManager) MarkTokenInvalid(cacheKey string) error {
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
+	if cached, exists := tm.cache.tokens[cacheKey]; exists {
+		// 将可用次数设置为0，标记为失效
+		cached.Available = 0
+		logger.Warn("Token标记为失效",
+			logger.String("cache_key", cacheKey),
+			logger.String("token_preview", createTokenPreview(cached.Token.AccessToken)))
+
+		// 尝试持久化到配置文件
+		if err := DisableTokenInConfig(cached.Token.RefreshToken); err != nil {
+			logger.Warn("无法持久化token失效状态",
+				logger.String("cache_key", cacheKey),
+				logger.Err(err))
+			// 注意：即使持久化失败，仍继续标记为失效（内存中）
+		}
+
+		// 强制重置currentIndex，下次会选择下一个可用的token
+		// 找到当前失效token在configOrder中的位置
+		for i, key := range tm.configOrder {
+			if key == cacheKey {
+				// 设置currentIndex为当前位置，selectBestTokenUnlocked会自动跳过并选择下一个
+				tm.currentIndex = i
+				logger.Info("重置Token选择索引以切换到下一个token",
+					logger.Int("reset_index", tm.currentIndex),
+					logger.String("invalid_key", cacheKey))
+				break
+			}
+		}
+		return nil
+	}
+
+	logger.Warn("无法标记Token为失效：缓存键不存在",
+		logger.String("cache_key", cacheKey))
+	return fmt.Errorf("token cache key not found: %s", cacheKey)
+}
+
 // *** 已删除 set 和 updateLastUsed 方法 ***
 // SimpleTokenCache 现在是纯数据结构，所有访问由 TokenManager.mutex 保护
 // set 操作：直接通过 tm.cache.tokens[key] = value 完成
@@ -328,4 +386,13 @@ func generateConfigOrder(configs []AuthConfig) []string {
 		logger.Any("order", order))
 
 	return order
+}
+
+// createTokenPreview 创建token预览显示格式 (***+后10位)
+func createTokenPreview(token string) string {
+	if len(token) <= 10 {
+		return strings.Repeat("*", len(token))
+	}
+	suffix := token[len(token)-10:]
+	return "***" + suffix
 }
