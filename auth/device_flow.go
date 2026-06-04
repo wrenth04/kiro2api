@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	kconfig "kiro2api/config"
 	"kiro2api/logger"
 	"kiro2api/utils"
 	"net/http"
@@ -179,7 +180,7 @@ func registerClient(config *DeviceFlowConfig) (*ClientRegistration, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kiro2api/1.0")
+	req.Header.Set("User-Agent", kconfig.UserAgentOIDC)
 
 	resp, err := utils.SharedHTTPClient.Do(req)
 	if err != nil {
@@ -226,7 +227,7 @@ func startDeviceAuthorization(clientReg *ClientRegistration, config *DeviceFlowC
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kiro2api/1.0")
+	req.Header.Set("User-Agent", kconfig.UserAgentOIDC)
 
 	resp, err := utils.SharedHTTPClient.Do(req)
 	if err != nil {
@@ -351,7 +352,7 @@ func attemptTokenFetch(url string, clientReg *ClientRegistration, deviceCode str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kiro2api/1.0")
+	req.Header.Set("User-Agent", kconfig.UserAgentOIDC)
 
 	resp, err := utils.SharedHTTPClient.Do(req)
 	if err != nil {

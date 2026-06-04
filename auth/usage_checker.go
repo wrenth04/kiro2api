@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"io"
+	"kiro2api/config"
 	"kiro2api/logger"
 	"kiro2api/types"
 	"kiro2api/utils"
@@ -41,8 +42,8 @@ func (c *UsageLimitsChecker) CheckUsageLimits(token types.TokenInfo) (*types.Usa
 	}
 
 	// 设置请求头 (严格按照token.md中的示例)
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.0 KiroIDE-0.2.13-66c23a8c5d15afabec89ef9954ef52a119f10d369df04d548fc6c1eac694b0d1")
-	req.Header.Set("user-agent", "aws-sdk-js/1.0.0 ua/2.1 os/darwin#24.6.0 lang/js md/nodejs#20.16.0 api/codewhispererruntime#1.0.0 m/E KiroIDE-0.2.13-66c23a8c5d15afabec89ef9954ef52a119f10d369df04d548fc6c1eac694b0d1")
+	req.Header.Set("x-amz-user-agent", config.XAmzUserAgentRuntime)
+	req.Header.Set("user-agent", config.UserAgentRuntime)
 	req.Header.Set("host", "codewhisperer.us-east-1.amazonaws.com")
 	req.Header.Set("amz-sdk-invocation-id", generateInvocationID())
 	req.Header.Set("amz-sdk-request", "attempt=1; max=1")

@@ -227,17 +227,11 @@ func (tm *TokenManager) refreshCacheUnlocked() error {
 			var err error
 			token, err = tm.refreshSingleToken(cfg)
 			if err != nil {
-				logger.Warn("刷新单个token失败，尝试使用RefreshToken作为AccessToken（可能是新token）",
+				logger.Warn("刷新token失败，跳过此配置",
 					logger.Int("config_index", i),
 					logger.String("auth_type", cfg.AuthType),
 					logger.Err(err))
-
-				// 降级方案：使用RefreshToken作为AccessToken（某些OAuth流程中refresh token可以直接使用）
-				token = types.Token{
-					AccessToken:  cfg.RefreshToken,
-					RefreshToken: cfg.RefreshToken,
-					ExpiresAt:    time.Now().Add(24 * time.Hour),
-				}
+				continue
 			}
 		}
 
@@ -312,6 +306,17 @@ func (tm *TokenManager) MarkTokenInvalid(cacheKey string) error {
 		logger.Warn("Token标记为失效",
 			logger.String("cache_key", cacheKey),
 			logger.String("token_preview", createTokenPreview(cached.Token.AccessToken)))
+
+		// 同时在内存中禁用对应的configs条目，防止下次refreshCache重新加载此token
+		for i, key := range tm.configOrder {
+			if key == cacheKey && i < len(tm.configs) {
+				tm.configs[i].Disabled = true
+				logger.Info("已在内存中禁用对应的configs条目",
+					logger.Int("config_index", i),
+					logger.String("cache_key", cacheKey))
+				break
+			}
+		}
 
 		// 尝试持久化到配置文件
 		if err := DisableTokenInConfig(cached.Token.RefreshToken); err != nil {

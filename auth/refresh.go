@@ -42,7 +42,7 @@ func refreshSocialToken(refreshToken string) (types.TokenInfo, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kiro2api/1.0")
+	req.Header.Set("User-Agent", config.UserAgentOIDC)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Connection", "keep-alive")
 
@@ -97,7 +97,7 @@ func refreshIdCToken(authConfig AuthConfig) (types.TokenInfo, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Host", "oidc.us-east-1.amazonaws.com")
 	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/3.738.0 ua/2.1 os/other lang/js md/browser#unknown_unknown api/sso-oidc#3.738.0 m/E KiroIDE")
+	req.Header.Set("x-amz-user-agent", config.XAmzUserAgentOIDC)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "*")
 	req.Header.Set("sec-fetch-mode", "cors")
