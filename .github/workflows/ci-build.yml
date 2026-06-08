@@ -5,6 +5,11 @@ on:
     branches:
       - '**'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch or tag) to build'
+        required: false
+        type: string
 
 env:
   GO_VERSION: '1.24.0'
@@ -38,6 +43,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
