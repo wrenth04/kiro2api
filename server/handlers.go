@@ -552,67 +552,19 @@ func handleTokenPoolAPI(c *gin.Context) {
 			continue
 		}
 
-		// 检查使用限制
-		var usageInfo *types.UsageLimits
-		var available float64 // 默认值 (浮点数)
-		var userEmail = "未知用户"
-
-		checker := auth.NewUsageLimitsChecker()
-		if usage, checkErr := checker.CheckUsageLimits(tokenInfo); checkErr == nil {
-			usageInfo = usage
-			available = auth.CalculateAvailableCount(usage)
-
-			// 提取用户邮箱
-			if usage.UserInfo.Email != "" {
-				userEmail = usage.UserInfo.Email
-			}
-		}
-
-		// 构建token数据
+		// 构建token数据（不再检查使用限制）
 		tokenData := map[string]any{
-			"index":           i,
-			"user_email":      maskEmail(userEmail), // 对邮箱进行脱敏处理
-			"token_preview":   createTokenPreview(tokenInfo.AccessToken),
-			"auth_type":       strings.ToLower(authConfig.AuthType),
-			"remaining_usage": available,
-			"expires_at":      tokenInfo.ExpiresAt.Format(time.RFC3339),
-			"last_used":       time.Now().Format(time.RFC3339),
-			"status":          "active",
+			"index":         i,
+			"token_preview": createTokenPreview(tokenInfo.AccessToken),
+			"auth_type":     strings.ToLower(authConfig.AuthType),
+			"expires_at":    tokenInfo.ExpiresAt.Format(time.RFC3339),
+			"last_used":     time.Now().Format(time.RFC3339),
+			"status":        "active",
 		}
 
-		// 添加使用限制详细信息 (基于CREDIT资源类型)
-		if usageInfo != nil {
-			for _, breakdown := range usageInfo.UsageBreakdownList {
-				if breakdown.ResourceType == "CREDIT" {
-					var totalLimit float64
-					var totalUsed float64
-
-					// 基础额度
-					totalLimit += breakdown.UsageLimitWithPrecision
-					totalUsed += breakdown.CurrentUsageWithPrecision
-
-					// 免费试用额度
-					if breakdown.FreeTrialInfo != nil && breakdown.FreeTrialInfo.FreeTrialStatus == "ACTIVE" {
-						totalLimit += breakdown.FreeTrialInfo.UsageLimitWithPrecision
-						totalUsed += breakdown.FreeTrialInfo.CurrentUsageWithPrecision
-					}
-
-					tokenData["usage_limits"] = map[string]any{
-						"total_limit":   totalLimit, // 保留浮点精度
-						"current_usage": totalUsed,  // 保留浮点精度
-						"is_exceeded":   available <= 0,
-					}
-					break
-				}
-			}
-		}
-
-		// 如果token不可用，标记状态
-		if available <= 0 {
-			tokenData["status"] = "exhausted"
-		} else {
-			activeCount++
-		}
+		// 所有token都標記為active（用完就換下一個）
+		tokenData["status"] = "active"
+		activeCount++
 
 		// 如果是 IdC 认证，显示额外信息
 		if authConfig.AuthType == auth.AuthMethodIdC && authConfig.ClientID != "" {

@@ -110,23 +110,18 @@ func (tm *TokenManager) GetBestTokenWithUsage() (*types.TokenWithUsage, error) {
 
 	// 更新最后使用时间（在锁内，安全）
 	bestToken.LastUsed = time.Now()
-	available := bestToken.Available
 	if bestToken.Available > 0 {
 		bestToken.Available--
 	}
 
-	// 构造 TokenWithUsage
+	// 构造 TokenWithUsage（不再检查使用限制）
 	tokenWithUsage := &types.TokenWithUsage{
 		TokenInfo:       bestToken.Token,
-		UsageLimits:     bestToken.UsageInfo,
-		AvailableCount:  available, // 使用精确计算的可用次数
+		UsageLimits:     nil,
+		AvailableCount:  1,
 		LastUsageCheck:  bestToken.LastUsed,
-		IsUsageExceeded: available <= 0,
+		IsUsageExceeded: false,
 	}
-
-	logger.Debug("返回TokenWithUsage",
-		logger.Float64("available_count", available),
-		logger.Bool("is_exceeded", tokenWithUsage.IsUsageExceeded))
 
 	return tokenWithUsage, nil
 }
@@ -235,32 +230,17 @@ func (tm *TokenManager) refreshCacheUnlocked() error {
 			}
 		}
 
-		// 检查使用限制
-		var usageInfo *types.UsageLimits
-		var available float64 = 1000 // 默认可用次数
-
-		checker := NewUsageLimitsChecker()
-		if usage, checkErr := checker.CheckUsageLimits(token); checkErr == nil {
-			usageInfo = usage
-			available = CalculateAvailableCount(usage)
-		} else {
-			logger.Warn("检查使用限制失败，使用默认可用次数",
-				logger.Err(checkErr),
-				logger.Float64("default_available", available))
-		}
-
-		// 更新缓存
+			// 更新缓存（不检查使用限制，用完就换下一个）
 		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, i)
 		tm.cache.tokens[cacheKey] = &CachedToken{
 			Token:     token,
-			UsageInfo: usageInfo,
+			UsageInfo: nil,
 			CachedAt:  time.Now(),
-			Available: available,
+			Available: 1, // 简单计数：1表示可用，0表示已耗尽
 		}
 
 		logger.Debug("token缓存更新",
-			logger.String("cache_key", cacheKey),
-			logger.Float64("available", available))
+			logger.String("cache_key", cacheKey))
 	}
 
 	tm.lastRefresh = time.Now()
@@ -351,30 +331,6 @@ func (tm *TokenManager) MarkTokenInvalid(cacheKey string) error {
 // set 操作：直接通过 tm.cache.tokens[key] = value 完成
 // updateLastUsed 操作：已合并到 getBestToken 方法中
 
-// CalculateAvailableCount 计算可用次数 (基于CREDIT资源类型，返回浮点精度)
-func CalculateAvailableCount(usage *types.UsageLimits) float64 {
-	for _, breakdown := range usage.UsageBreakdownList {
-		if breakdown.ResourceType == "CREDIT" {
-			var totalAvailable float64
-
-			// 优先使用免费试用额度 (如果存在且处于ACTIVE状态)
-			if breakdown.FreeTrialInfo != nil && breakdown.FreeTrialInfo.FreeTrialStatus == "ACTIVE" {
-				freeTrialAvailable := breakdown.FreeTrialInfo.UsageLimitWithPrecision - breakdown.FreeTrialInfo.CurrentUsageWithPrecision
-				totalAvailable += freeTrialAvailable
-			}
-
-			// 加上基础额度
-			baseAvailable := breakdown.UsageLimitWithPrecision - breakdown.CurrentUsageWithPrecision
-			totalAvailable += baseAvailable
-
-			if totalAvailable < 0 {
-				return 0.0
-			}
-			return totalAvailable
-		}
-	}
-	return 0.0
-}
 
 // generateConfigOrder 生成token配置的顺序
 func generateConfigOrder(configs []AuthConfig) []string {
